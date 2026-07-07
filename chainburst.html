@@ -1,0 +1,1070 @@
+<!--
+ChainBurst
+
+MIT License
+
+Copyright (c) 2026 ChainBurst contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+This game is an open-source clone inspired by the classic Flash game, created
+for educational purposes.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ChainBurst — Chain reaction puzzle</title>
+<style>
+  /* ============================================================
+     CHAINBURST — Chain reaction puzzle
+     Single-file game. All styles inline, no external assets.
+     ============================================================ */
+
+  :root{
+    --ink:#eef2ff;
+    --ink-dim:rgba(230,236,255,.55);
+    --panel:rgba(16,20,44,.72);
+    --panel-edge:rgba(150,170,255,.18);
+    --accent:#8fd8ff;
+    --accent2:#c9a6ff;
+    --gold:#ffe9a8;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html,body{
+    width:100%;
+    height:100%;
+    height:100dvh;
+    overflow:hidden;
+    overscroll-behavior:none;
+    background:#05060f;
+    color:var(--ink);
+    font-family:"Avenir Next","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:none;
+  }
+
+  #stage-wrap{
+    position:fixed; inset:0;
+    width:100vw; height:100vh; height:100dvh;
+    display:flex; align-items:center; justify-content:center;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background:
+      radial-gradient(120% 90% at 50% -10%, #1b2150 0%, rgba(27,33,80,0) 55%),
+      radial-gradient(110% 90% at 85% 110%, #2a1440 0%, rgba(42,20,64,0) 60%),
+      linear-gradient(180deg, #070a1c 0%, #0a0d24 45%, #120a26 100%);
+  }
+
+  canvas{
+    display:block;
+    width:100%; height:100%;
+    touch-action:none;
+    cursor:crosshair;
+  }
+
+  /* ---------- HUD ---------- */
+  #hud{
+    position:fixed; inset:0;
+    pointer-events:none;
+    display:flex; flex-direction:column; justify-content:space-between;
+    padding:
+      calc(clamp(8px,1.7vmin,22px) + env(safe-area-inset-top))
+      calc(clamp(8px,1.7vmin,22px) + env(safe-area-inset-right))
+      calc(clamp(8px,1.7vmin,22px) + env(safe-area-inset-bottom))
+      calc(clamp(8px,1.7vmin,22px) + env(safe-area-inset-left));
+    opacity:0; transition:opacity .5s ease;
+  }
+  #hud.visible{ opacity:1; }
+
+  .hud-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+
+  .chip{
+    background:var(--panel);
+    border:1px solid var(--panel-edge);
+    border-radius:14px;
+    padding:8px 14px;
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    box-shadow:0 6px 24px rgba(0,0,0,.35);
+    min-width:0;
+  }
+  .chip .label{
+    font-size:10px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--ink-dim); margin-bottom:2px;
+  }
+  .chip .value{
+    font-size:clamp(15px,2.4vmin,20px); font-weight:600;
+    font-variant-numeric:tabular-nums;
+  }
+  #lives-chip .value{ letter-spacing:4px; }
+  #lives-chip .life-on{ color:#ffb3c8; text-shadow:0 0 10px rgba(255,140,180,.8); }
+  #lives-chip .life-off{ color:rgba(255,255,255,.15); }
+
+  #progress-chip{ text-align:center; min-width:min(280px, 38vw); }
+  #progress-chip .value b{
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  #progress-chip.goal-met .value b{
+    background:linear-gradient(90deg,#b8ffde,#ffe9a8);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+
+  .hud-group{ display:flex; gap:8px; flex-wrap:wrap; }
+
+  #hint{
+    position:fixed; left:50%; bottom:11vh; transform:translateX(-50%);
+    font-size:clamp(12px,1.8vmin,15px);
+    letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink-dim);
+    text-shadow:0 0 18px rgba(140,170,255,.4);
+    pointer-events:none;
+    opacity:0; transition:opacity .6s ease;
+    animation:hintFloat 3.2s ease-in-out infinite;
+  }
+  #hint.visible{ opacity:1; }
+  @keyframes hintFloat{ 0%,100%{transform:translate(-50%,0)} 50%{transform:translate(-50%,-6px)} }
+
+  /* ---------- Overlay screens ---------- */
+  #overlay{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      calc(14px + env(safe-area-inset-right))
+      calc(14px + env(safe-area-inset-bottom))
+      calc(14px + env(safe-area-inset-left));
+    background:radial-gradient(80% 80% at 50% 40%, rgba(10,13,34,.45), rgba(4,5,14,.82));
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+    opacity:0; pointer-events:none;
+    transition:opacity .55s ease;
+    z-index:10;
+  }
+  #overlay.visible{ opacity:1; pointer-events:auto; }
+
+  .panel{
+    text-align:center;
+    padding:clamp(28px,5vmin,52px) clamp(30px,6vmin,70px);
+    border-radius:26px;
+    background:linear-gradient(165deg, rgba(28,34,70,.82), rgba(18,14,42,.86));
+    border:1px solid var(--panel-edge);
+    box-shadow:0 30px 90px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+    width:min(88vw,520px);
+    max-height:min(88dvh,760px);
+    overflow:auto;
+    -webkit-overflow-scrolling:touch;
+    transform:translateY(14px) scale(.96);
+    transition:transform .55s cubic-bezier(.2,.9,.25,1.2);
+  }
+  #overlay.visible .panel{ transform:translateY(0) scale(1); }
+
+  .panel .kicker{
+    font-size:11px; letter-spacing:.34em; text-transform:uppercase;
+    color:var(--ink-dim); margin-bottom:14px;
+  }
+  .panel h1{
+    font-size:clamp(34px,7vmin,58px);
+    font-weight:700; letter-spacing:.02em; line-height:1.05;
+    background:linear-gradient(95deg,#bfeaff 0%,#a8b8ff 35%,#e2b6ff 70%,#ffc9e0 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 26px rgba(140,170,255,.35));
+    margin-bottom:8px;
+  }
+  .panel.result-clear h1{
+    background:linear-gradient(95deg,#c6ffe3,#9be7ff,#e8d3ff);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .panel.result-fail h1{
+    background:linear-gradient(95deg,#c8ccec,#9aa2d6);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:none;
+  }
+  .panel.result-gameover h1{
+    background:linear-gradient(95deg,#ffb9c9,#c79bff);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .panel.result-gameclear h1{
+    background:linear-gradient(95deg,#fff3c4,#ffd98a,#ffc1e8);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 30px rgba(255,220,150,.45));
+  }
+  .panel .sub{
+    color:var(--ink-dim); font-size:clamp(13px,2vmin,16px);
+    letter-spacing:.06em; margin-bottom:22px;
+  }
+  .panel .detail{
+    font-size:clamp(13px,2vmin,16px);
+    color:rgba(226,232,255,.85);
+    line-height:1.8; margin-bottom:26px;
+    font-variant-numeric:tabular-nums;
+  }
+  .panel .detail b{ color:#fff; font-weight:600; }
+  .panel .detail .best-tag{
+    display:inline-block; margin-left:8px; padding:2px 10px; border-radius:999px;
+    font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:#2a1c05; background:linear-gradient(90deg,#ffe9a8,#ffd27a);
+    box-shadow:0 0 20px rgba(255,215,130,.5);
+  }
+
+  button{
+    pointer-events:auto;
+    font:inherit; font-weight:600;
+    font-size:clamp(14px,2.2vmin,17px);
+    letter-spacing:.08em;
+    color:#0b1024;
+    background:linear-gradient(95deg,#a5e6ff,#b9b3ff,#f2b8e6);
+    border:none; border-radius:999px;
+    padding:13px 38px;
+    cursor:pointer;
+    box-shadow:0 8px 30px rgba(130,150,255,.35), inset 0 1px 0 rgba(255,255,255,.6);
+    transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;
+  }
+  button:hover{ transform:translateY(-2px); box-shadow:0 12px 38px rgba(140,160,255,.5); filter:brightness(1.05); }
+  button:active{ transform:translateY(0) scale(.98); }
+  button:focus-visible{ outline:2px solid #fff; outline-offset:3px; }
+  button.ghost{
+    background:transparent; color:var(--ink);
+    border:1px solid var(--panel-edge);
+    box-shadow:none;
+    margin-left:10px;
+  }
+  button.ghost:hover{ border-color:rgba(180,195,255,.5); box-shadow:0 6px 24px rgba(0,0,0,.3); }
+
+  @media (prefers-reduced-motion:reduce){
+    #hint{ animation:none; }
+    .panel{ transition:none; }
+  }
+  @media (max-width:760px){
+    .hud-row{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      align-items:start;
+      gap:7px;
+    }
+    .hud-row > .hud-group:first-child{ order:1; justify-self:start; }
+    .hud-row > .hud-group:last-child{ order:2; justify-self:end; justify-content:flex-end; }
+    #progress-chip{
+      order:3;
+      grid-column:1 / -1;
+      justify-self:center;
+      width:min(92vw, 360px);
+      min-width:0;
+    }
+    .hud-group{ gap:6px; }
+    .chip{ padding:6px 9px; border-radius:11px; }
+    .chip .label{ font-size:8px; letter-spacing:.17em; }
+    .chip .value{ font-size:clamp(13px,4.5vw,18px); }
+    #lives-chip .value{ letter-spacing:2px; }
+    #hint{ bottom:calc(7vh + env(safe-area-inset-bottom)); font-size:11px; }
+    .panel{
+      width:min(94vw,520px);
+      padding:26px 22px;
+      border-radius:22px;
+    }
+    .panel .kicker{ font-size:10px; letter-spacing:.24em; }
+    .panel h1{ font-size:clamp(32px,12vw,52px); }
+    .panel .detail{ line-height:1.65; }
+    button{ width:100%; min-height:48px; padding:13px 22px; }
+    button.ghost{ margin-left:0; margin-top:10px; }
+  }
+
+  @media (max-height:520px) and (orientation:landscape){
+    #hud{ padding:calc(6px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left)); }
+    .chip{ padding:5px 9px; border-radius:10px; }
+    .chip .label{ font-size:7.5px; margin-bottom:0; }
+    .chip .value{ font-size:13px; }
+    #progress-chip{ min-width:210px; }
+    #hint{ bottom:calc(5vh + env(safe-area-inset-bottom)); }
+    .panel{ padding:22px 30px; max-height:88dvh; }
+    .panel h1{ font-size:38px; }
+    .panel .sub{ margin-bottom:12px; }
+    .panel .detail{ margin-bottom:16px; line-height:1.55; }
+  }
+
+  @media (max-width:380px){
+    .hud-row{ gap:5px; }
+    .chip{ padding:5px 7px; }
+    .chip .label{ font-size:7px; letter-spacing:.14em; }
+    .chip .value{ font-size:13px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage-wrap"><canvas id="game"></canvas></div>
+
+<!-- ---------- HUD ---------- -->
+<div id="hud">
+  <div class="hud-row">
+    <div class="hud-group">
+      <div class="chip"><div class="label">Stage</div><div class="value" id="hud-stage">1 / 12</div></div>
+      <div class="chip" id="lives-chip"><div class="label">Lives</div><div class="value" id="hud-lives"></div></div>
+    </div>
+    <div class="chip" id="progress-chip">
+      <div class="label">Triggered / Required</div>
+      <div class="value"><b id="hud-progress">0 / 1</b></div>
+    </div>
+    <div class="hud-group">
+      <div class="chip"><div class="label">Score</div><div class="value" id="hud-score">0</div></div>
+      <div class="chip"><div class="label">Best</div><div class="value" id="hud-best">0</div></div>
+    </div>
+  </div>
+  <div></div>
+</div>
+
+<div id="hint">Click once to start the chain</div>
+
+<!-- ---------- Overlay ---------- -->
+<div id="overlay">
+  <div class="panel" id="panel">
+    <div class="kicker" id="p-kicker">Chain reaction puzzle</div>
+    <h1 id="p-title">ChainBurst</h1>
+    <div class="sub" id="p-sub">One click. Endless ripples.</div>
+    <div class="detail" id="p-detail"></div>
+    <div id="p-buttons"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ==================================================================
+   CHAINBURST — Chain reaction puzzle
+   ------------------------------------------------------------------
+   HOW TO TUNE THIS GAME
+   • Particle count / clear requirement .... edit STAGES below
+   • Lives .................................. CONFIG.startLives
+   • Colors ................................. PALETTE array
+   • Expansion speed / feel ................. CONFIG.expandTime,
+                                              CONFIG.holdTime,
+                                              CONFIG.fadeTime,
+                                              CONFIG.maxRadiusFactor
+   • Add / edit stages ...................... push {count, goal}
+                                              objects onto STAGES
+   ================================================================== */
+
+/* ---------- Stage definitions (count = moving particles, goal = required triggers) ---------- */
+const STAGES = [
+  { count: 5,  goal: 1  },   // Stage 1  — tutorial, nearly guaranteed
+  { count: 10, goal: 2  },   // Stage 2
+  { count: 15, goal: 3  },   // Stage 3
+  { count: 20, goal: 5  },   // Stage 4
+  { count: 25, goal: 7  },   // Stage 5
+  { count: 30, goal: 10 },   // Stage 6
+  { count: 35, goal: 15 },   // Stage 7
+  { count: 40, goal: 21 },   // Stage 8
+  { count: 45, goal: 27 },   // Stage 9
+  { count: 50, goal: 33 },   // Stage 10
+  { count: 55, goal: 44 },   // Stage 11
+  { count: 60, goal: 55 },   // Stage 12 — very hard, still fair
+];
+
+/* ---------- Global tuning ---------- */
+const CONFIG = {
+  startLives:      3,
+  expandTime:      1.05,   // seconds a triggered circle takes to reach full size
+  holdTime:        1.9,    // seconds it stays at full size (still able to trigger)
+  fadeTime:        0.95,   // seconds it takes to fade out
+  maxRadiusFactor: 0.135,  // blast radius = min(W,H) * this  (bigger = easier)
+  playerRadiusBoost: 1.12, // player's own blast is slightly larger
+  collisionGrace:  2.5,    // extra px of forgiveness on collisions
+  particleSpeedMin: 22,    // px / second (scaled a bit by screen size)
+  particleSpeedMax: 58,
+  /* scoring */
+  pointsPerParticle: 100,  // base points for every triggered particle
+  chainStepBonus:    20,   // extra points × position in the chain (rewards long chains)
+  clearBonusPerStage: 500, // stage-clear bonus = stage# × this
+  overGoalBonus:     150,  // per particle triggered beyond the requirement
+  lifeBonus:         250,  // per remaining life, awarded on each stage clear
+};
+
+/* ---------- Palette (soft glow colors — edit freely) ---------- */
+const PALETTE = [
+  { name:"cyan",   core:"#eafdff", mid:"#7fe3f2", edge:"#2fb9d8" },
+  { name:"blue",   core:"#eef3ff", mid:"#8fb0ff", edge:"#4a6ee0" },
+  { name:"purple", core:"#f6efff", mid:"#b79bf5", edge:"#7d5cd6" },
+  { name:"pink",   core:"#fff0f7", mid:"#f2a3cd", edge:"#d9639f" },
+  { name:"orange", core:"#fff4e8", mid:"#f6bd85", edge:"#e08a3c" },
+  { name:"yellow", core:"#fffbea", mid:"#f4dd94", edge:"#d9b34e" },
+  { name:"white",  core:"#ffffff", mid:"#dfe7ff", edge:"#9fb2e8" },
+];
+
+/* ================================================================
+   Setup: canvas, DPI, resize
+   ================================================================ */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+
+function viewportSize() {
+  // visualViewport handles mobile browser address bars more accurately when available.
+  const vv = window.visualViewport;
+  const w = Math.round(vv ? vv.width : window.innerWidth);
+  const h = Math.round(vv ? vv.height : window.innerHeight);
+  return { w: Math.max(1, w), h: Math.max(1, h) };
+}
+
+function resize() {
+  const oldW = W, oldH = H;
+  const vp = viewportSize();
+  // Fill the actual visible viewport on both desktop and mobile.
+  // This keeps portrait phones playable instead of forcing a desktop ratio.
+  W = vp.w; H = vp.h;
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width  = W + "px";
+  canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  buildBackground();
+  // Reposition existing particles proportionally so resizing feels natural.
+  if (oldW > 0 && oldH > 0 && game.particles.length) {
+    const sx = W / oldW, sy = H / oldH;
+    for (const p of game.particles) { p.x *= sx; p.y *= sy; }
+    for (const b of game.blasts)    { b.x *= sx; b.y *= sy; }
+  }
+}
+
+/* Cached background gradient + ambient star field */
+let bgGrad = null;
+let ambient = [];
+function buildBackground() {
+  bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0.00, "#070a1e");
+  bgGrad.addColorStop(0.45, "#0b0e2a");
+  bgGrad.addColorStop(1.00, "#140b2b");
+  ambient = [];
+  const n = Math.round((W * H) / 26000);
+  for (let i = 0; i < n; i++) {
+    ambient.push({
+      x: Math.random() * W, y: Math.random() * H,
+      r: 0.4 + Math.random() * 1.4,
+      a: 0.04 + Math.random() * 0.10,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 0.5) * 4,
+      tw: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+/* ================================================================
+   Pre-rendered glow sprites (one per palette color) — fast & pretty
+   ================================================================ */
+const SPRITE = 128;
+const sprites = PALETTE.map(c => {
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = SPRITE;
+  const g = cv.getContext("2d");
+  const grd = g.createRadialGradient(SPRITE/2, SPRITE/2, 0, SPRITE/2, SPRITE/2, SPRITE/2);
+  grd.addColorStop(0.00, c.core);
+  grd.addColorStop(0.18, c.mid);
+  grd.addColorStop(0.45, hexA(c.edge, 0.55));
+  grd.addColorStop(1.00, hexA(c.edge, 0));
+  g.fillStyle = grd;
+  g.fillRect(0, 0, SPRITE, SPRITE);
+  return cv;
+});
+
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+/* ================================================================
+   Deterministic seeded randomness (mulberry32)
+   The same stage always produces the same starting layout,
+   so retries are replayable and learnable.
+   ================================================================ */
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ================================================================
+   Game state
+   ================================================================ */
+const game = {
+  mode: "menu",          // menu | playing | resolving | over
+  stageIndex: 0,
+  lives: CONFIG.startLives,
+  score: 0,
+  stageStartScore: 0,    // points earned in a failed attempt are rolled back
+  best: 0,
+  clicked: false,
+  triggered: 0,
+  chainCount: 0,
+  particles: [],
+  blasts: [],            // active triggered circles (particles + player blast)
+  sparkles: [],
+  glow: 0,               // full-screen bloom level during big chains
+  shockwaves: [],        // decorative rings on trigger
+};
+
+try { game.best = parseInt(localStorage.getItem("chainburst.best") || "0", 10) || 0; }
+catch (e) { game.best = 0; }
+
+function saveBest() {
+  if (game.score > game.best) {
+    game.best = game.score;
+    try { localStorage.setItem("chainburst.best", String(game.best)); } catch (e) {}
+  }
+}
+
+/* ================================================================
+   Stage generation — seeded, with natural clusters
+   ================================================================ */
+function buildStage(index) {
+  const def = STAGES[index];
+  const rand = mulberry32(index * 977 + 12345);
+  game.particles = [];
+  game.blasts = [];
+  game.sparkles = [];
+  game.shockwaves = [];
+  game.glow = 0;
+  game.clicked = false;
+  game.triggered = 0;
+  game.chainCount = 0;
+  game.stageStartScore = game.score;
+
+  const pad = Math.min(W, H) * 0.06 + 14;
+  const speedScale = Math.min(W, H) / 640;
+
+  // ~55% of particles are seeded near cluster centers so natural
+  // groupings exist and every layout has a fair "good click".
+  const clusterN = Math.max(2, Math.round(def.count / 9));
+  const clusters = [];
+  for (let i = 0; i < clusterN; i++) {
+    clusters.push({
+      x: pad + rand() * (W - pad * 2),
+      y: pad + rand() * (H - pad * 2),
+    });
+  }
+
+  for (let i = 0; i < def.count; i++) {
+    let x, y;
+    if (rand() < 0.55) {
+      const c = clusters[Math.floor(rand() * clusters.length)];
+      const ang = rand() * Math.PI * 2;
+      const dist = (rand() + rand()) * 0.5 * Math.min(W, H) * 0.17;
+      x = c.x + Math.cos(ang) * dist;
+      y = c.y + Math.sin(ang) * dist;
+    } else {
+      x = pad + rand() * (W - pad * 2);
+      y = pad + rand() * (H - pad * 2);
+    }
+    x = Math.max(pad, Math.min(W - pad, x));
+    y = Math.max(pad, Math.min(H - pad, y));
+
+    const sp = (CONFIG.particleSpeedMin +
+               rand() * (CONFIG.particleSpeedMax - CONFIG.particleSpeedMin)) *
+               Math.max(0.7, speedScale);
+    const dir = rand() * Math.PI * 2;
+    game.particles.push({
+      x, y,
+      vx: Math.cos(dir) * sp,
+      vy: Math.sin(dir) * sp,
+      r: Math.max(4.5, Math.min(W, H) * 0.009) * (0.85 + rand() * 0.5),
+      color: Math.floor(rand() * PALETTE.length),
+      phase: rand() * Math.PI * 2,   // gentle breathing
+      state: "drift",                // drift | (moved into blasts when triggered)
+    });
+  }
+  updateHUD();
+}
+
+function maxBlastRadius() {
+  return Math.max(52, Math.min(W, H) * CONFIG.maxRadiusFactor);
+}
+
+/* ================================================================
+   Blast lifecycle: expand → hold → fade  (easeOutCubic expansion)
+   ================================================================ */
+function makeBlast(x, y, colorIndex, isPlayer) {
+  return {
+    x, y,
+    color: colorIndex,
+    isPlayer: !!isPlayer,
+    t: 0,
+    maxR: maxBlastRadius() * (isPlayer ? CONFIG.playerRadiusBoost : (0.9 + Math.random() * 0.2)),
+    state: "expand",   // expand | hold | fade | dead
+    radius: 0,
+    alpha: 1,
+  };
+}
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+function updateBlast(b, dt) {
+  b.t += dt;
+  if (b.state === "expand") {
+    const k = Math.min(1, b.t / CONFIG.expandTime);
+    b.radius = b.maxR * easeOutCubic(k);
+    b.alpha = 1;
+    if (k >= 1) { b.state = "hold"; b.t = 0; }
+  } else if (b.state === "hold") {
+    // gentle breathing at full size
+    b.radius = b.maxR * (1 + Math.sin(b.t * 5) * 0.012);
+    b.alpha = 1;
+    if (b.t >= CONFIG.holdTime) { b.state = "fade"; b.t = 0; }
+  } else if (b.state === "fade") {
+    const k = Math.min(1, b.t / CONFIG.fadeTime);
+    b.alpha = 1 - k;
+    b.radius = b.maxR * (1 + k * 0.06);
+    if (k >= 1) b.state = "dead";
+  }
+}
+
+/* ================================================================
+   Triggering
+   ================================================================ */
+function triggerParticle(p) {
+  p.state = "gone";
+  game.triggered++;
+  game.chainCount++;
+  game.score += CONFIG.pointsPerParticle + CONFIG.chainStepBonus * game.chainCount;
+  game.blasts.push(makeBlast(p.x, p.y, p.color, false));
+  spawnSparkles(p.x, p.y, p.color, 10);
+  game.shockwaves.push({ x: p.x, y: p.y, t: 0, color: p.color });
+  game.glow = Math.min(1, game.glow + 0.10);
+  updateHUD();
+}
+
+function spawnSparkles(x, y, colorIndex, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 30 + Math.random() * 140;
+    game.sparkles.push({
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 20,
+      life: 0.5 + Math.random() * 0.7,
+      t: 0,
+      r: 0.8 + Math.random() * 2.0,
+      color: colorIndex,
+    });
+  }
+}
+
+/* ================================================================
+   Input — exactly one click per stage
+   ================================================================ */
+function isTapInsideHud(y) {
+  // On touch devices the HUD is visually prominent; ignore accidental taps on it.
+  const hud = document.getElementById("hud");
+  if (!hud.classList.contains("visible")) return false;
+  const row = hud.querySelector(".hud-row");
+  if (!row) return false;
+  const r = row.getBoundingClientRect();
+  return y <= r.bottom + 8;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (game.mode !== "playing" || game.clicked) return;  // extra clicks ignored
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  if (e.pointerType === "touch" && isTapInsideHud(e.clientY)) return;
+  game.clicked = true;
+  game.blasts.push(makeBlast(x, y, 6 /* white */, true));
+  spawnSparkles(x, y, 6, 14);
+  game.shockwaves.push({ x, y, t: 0, color: 6 });
+  document.getElementById("hint").classList.remove("visible");
+}, { passive: true });
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", () => setTimeout(resize, 120));
+if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
+
+/* ================================================================
+   Main loop
+   ================================================================ */
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  update(dt, now / 1000);
+  draw(now / 1000);
+  requestAnimationFrame(frame);
+}
+
+function update(dt, time) {
+  // ambient dust always drifts
+  for (const s of ambient) {
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    if (s.x < -4) s.x = W + 4; if (s.x > W + 4) s.x = -4;
+    if (s.y < -4) s.y = H + 4; if (s.y > H + 4) s.y = -4;
+  }
+
+  // sparkles, rings, and bloom keep animating on result screens too
+  for (const s of game.sparkles) {
+    s.t += dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.vx *= (1 - 1.6 * dt);
+    s.vy = s.vy * (1 - 1.6 * dt) + 26 * dt;
+  }
+  game.sparkles = game.sparkles.filter(s => s.t < s.life);
+  for (const w of game.shockwaves) w.t += dt;
+  game.shockwaves = game.shockwaves.filter(w => w.t < 0.7);
+  game.glow = Math.max(0, game.glow - dt * 0.35);
+
+  if (game.mode !== "playing" && game.mode !== "resolving") return;
+
+  const grace = CONFIG.collisionGrace;
+
+  // move drifting particles + soft edge bounce
+  for (const p of game.particles) {
+    if (p.state !== "drift") continue;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.x < p.r)      { p.x = p.r;      p.vx =  Math.abs(p.vx) * 0.96; }
+    if (p.x > W - p.r)  { p.x = W - p.r;  p.vx = -Math.abs(p.vx) * 0.96; }
+    if (p.y < p.r)      { p.y = p.r;      p.vy =  Math.abs(p.vy) * 0.96; }
+    if (p.y > H - p.r)  { p.y = H - p.r;  p.vy = -Math.abs(p.vy) * 0.96; }
+  }
+
+  // blasts expand / hold / fade, and trigger particles while visible
+  for (const b of game.blasts) {
+    if (b.state === "dead") continue;
+    updateBlast(b, dt);
+    if (b.state === "dead" || b.alpha < 0.18) continue; // nearly-gone circles can't trigger
+    for (const p of game.particles) {
+      if (p.state !== "drift") continue;
+      const dx = p.x - b.x, dy = p.y - b.y;
+      const rr = b.radius + p.r + grace;
+      if (dx * dx + dy * dy <= rr * rr) triggerParticle(p);
+    }
+  }
+  game.blasts = game.blasts.filter(b => b.state !== "dead");
+
+  // Stage resolves only after the click happened AND every circle faded
+  if (game.clicked && game.blasts.length === 0 && game.sparkles.length === 0) {
+    resolveStage();
+  }
+}
+
+/* ================================================================
+   Stage resolution
+   ================================================================ */
+function resolveStage() {
+  game.mode = "resolving";
+  const def = STAGES[game.stageIndex];
+  const cleared = game.triggered >= def.goal;
+
+  if (cleared) {
+    const over = game.triggered - def.goal;
+    const clearBonus = (game.stageIndex + 1) * CONFIG.clearBonusPerStage;
+    const overBonus = over * CONFIG.overGoalBonus;
+    const lifeBonus = game.lives * CONFIG.lifeBonus;
+    game.score += clearBonus + overBonus + lifeBonus;
+    saveBest();
+    updateHUD();
+    if (game.stageIndex === STAGES.length - 1) {
+      showGameClear();
+    } else {
+      showStageClear(def, over, clearBonus, overBonus, lifeBonus);
+    }
+  } else {
+    game.score = game.stageStartScore;   // failed attempts don't bank points
+    game.lives--;
+    updateHUD();
+    if (game.lives <= 0) {
+      saveBest();
+      showGameOver(def);
+    } else {
+      showStageFail(def);
+    }
+  }
+}
+
+/* ================================================================
+   Overlay screens & buttons
+   ================================================================ */
+const overlay  = document.getElementById("overlay");
+const panel    = document.getElementById("panel");
+const pKicker  = document.getElementById("p-kicker");
+const pTitle   = document.getElementById("p-title");
+const pSub     = document.getElementById("p-sub");
+const pDetail  = document.getElementById("p-detail");
+const pButtons = document.getElementById("p-buttons");
+
+function showPanel(cls, kicker, title, sub, detailHTML, buttons) {
+  panel.className = "panel " + cls;
+  pKicker.textContent = kicker;
+  pTitle.textContent = title;
+  pSub.textContent = sub;
+  pDetail.innerHTML = detailHTML;
+  pButtons.innerHTML = "";
+  buttons.forEach(([label, fn, ghost], i) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (ghost) b.className = "ghost";
+    b.addEventListener("click", fn);
+    pButtons.appendChild(b);
+    if (i === 0) setTimeout(() => b.focus(), 60);
+  });
+  overlay.classList.add("visible");
+  game.mode = "over";
+}
+
+function hidePanel() { overlay.classList.remove("visible"); }
+
+function bestTag() {
+  return game.score >= game.best && game.score > 0
+    ? '<span class="best-tag">New best</span>' : "";
+}
+
+function showMenu() {
+  showPanel("", "Chain reaction puzzle", "ChainBurst",
+    "One click. Endless ripples.",
+    `Set off a single spark and watch it bloom.<br>
+     Trigger enough drifting lights to clear each of the <b>12 stages</b>.<br>
+     You have <b>${CONFIG.startLives} lives</b>. Best score: <b>${game.best.toLocaleString()}</b>`,
+    [["Start", startGame]]);
+}
+
+function showStageClear(def, over, clearBonus, overBonus, lifeBonus) {
+  celebrate(1);
+  showPanel("result-clear", `Stage ${game.stageIndex + 1} complete`, "Beautiful.",
+    "The chain sang.",
+    `Triggered <b>${game.triggered} / ${def.goal}</b>${over > 0 ? ` &nbsp;(+${over} extra)` : ""}<br>
+     Clear bonus <b>+${clearBonus.toLocaleString()}</b>
+     ${over > 0 ? ` · Overflow <b>+${overBonus.toLocaleString()}</b>` : ""}
+     · Life bonus <b>+${lifeBonus.toLocaleString()}</b><br>
+     Score <b>${game.score.toLocaleString()}</b> ${bestTag()}`,
+    [["Next Stage", nextStage]]);
+}
+
+function showStageFail(def) {
+  showPanel("result-fail", `Stage ${game.stageIndex + 1}`, "So close.",
+    "The ripple faded too soon.",
+    `Triggered <b>${game.triggered} / ${def.goal}</b><br>
+     Lives remaining <b>${game.lives}</b> — the same constellation awaits.`,
+    [["Retry", retryStage], ["Restart", confirmRestart, true]]);
+}
+
+function showGameOver(def) {
+  showPanel("result-gameover", "No lives remain", "Game Over",
+    "Every light must dim eventually.",
+    `Reached stage <b>${game.stageIndex + 1}</b> ·
+     Final triggered <b>${game.triggered} / ${def.goal}</b><br>
+     Score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
+     Best <b>${game.best.toLocaleString()}</b>`,
+    [["Restart", startGame]]);
+}
+
+function showGameClear() {
+  celebrate(2.2);
+  showPanel("result-gameclear", "All 12 stages complete", "Game Clear",
+    "You conducted the whole sky.",
+    `Final score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
+     Best <b>${game.best.toLocaleString()}</b> · Lives left <b>${game.lives}</b>`,
+    [["Restart", startGame]]);
+}
+
+/* Celebration burst drawn behind the panel */
+function celebrate(strength) {
+  const n = Math.round(40 * strength);
+  for (let i = 0; i < n; i++) {
+    spawnSparkles(
+      W * (0.2 + Math.random() * 0.6),
+      H * (0.2 + Math.random() * 0.6),
+      Math.floor(Math.random() * PALETTE.length), 3);
+  }
+  game.glow = Math.min(1, 0.5 * strength);
+}
+
+/* ---------- Flow ---------- */
+function startGame() {
+  hidePanel();
+  game.stageIndex = 0;
+  game.lives = CONFIG.startLives;
+  game.score = 0;
+  beginStage();
+}
+function nextStage() { hidePanel(); game.stageIndex++; beginStage(); }
+function retryStage() { hidePanel(); beginStage(); }
+function confirmRestart() { startGame(); }
+
+function beginStage() {
+  buildStage(game.stageIndex);
+  game.mode = "playing";
+  document.getElementById("hud").classList.add("visible");
+  const hint = document.getElementById("hint");
+  hint.textContent = game.stageIndex === 0
+    ? "Click once to start the chain"
+    : `Stage ${game.stageIndex + 1} — one click`;
+  hint.classList.add("visible");
+  setTimeout(() => hint.classList.remove("visible"), 3200);
+}
+
+/* ================================================================
+   HUD
+   ================================================================ */
+function updateHUD() {
+  const def = STAGES[game.stageIndex];
+  document.getElementById("hud-stage").textContent = `${game.stageIndex + 1} / ${STAGES.length}`;
+  let hearts = "";
+  for (let i = 0; i < CONFIG.startLives; i++) {
+    hearts += i < game.lives
+      ? '<span class="life-on">●</span>'
+      : '<span class="life-off">●</span>';
+  }
+  document.getElementById("hud-lives").innerHTML = hearts;
+  document.getElementById("hud-progress").textContent = `${game.triggered} / ${def.goal}`;
+  document.getElementById("progress-chip").classList.toggle("goal-met", game.triggered >= def.goal);
+  document.getElementById("hud-score").textContent = game.score.toLocaleString();
+  document.getElementById("hud-best").textContent = Math.max(game.best, game.score).toLocaleString();
+}
+
+/* ================================================================
+   Rendering
+   ================================================================ */
+function draw(time) {
+  // background
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // ambient dust (additive, faint twinkle)
+  ctx.globalCompositeOperation = "lighter";
+  for (const s of ambient) {
+    const a = s.a * (0.6 + 0.4 * Math.sin(time * 1.4 + s.tw));
+    ctx.globalAlpha = a;
+    ctx.fillStyle = "#cfe0ff";
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // drifting particles — layered glow sprite + bright core
+  for (const p of game.particles) {
+    if (p.state !== "drift") continue;
+    const pulse = 1 + 0.10 * Math.sin(time * 2.2 + p.phase);
+    const glowR = p.r * 5.2 * pulse;
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(sprites[p.color], p.x - glowR, p.y - glowR, glowR * 2, glowR * 2);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = PALETTE[p.color].core;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * 0.55 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // shockwave rings (brief crisp accents on trigger)
+  for (const w of game.shockwaves) {
+    const k = w.t / 0.7;
+    const r = 8 + k * 46;
+    ctx.globalAlpha = (1 - k) * 0.5;
+    ctx.strokeStyle = PALETTE[w.color].mid;
+    ctx.lineWidth = 1.6 * (1 - k) + 0.4;
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // expanding blasts — translucent body, glowing rim, soft core
+  for (const b of game.blasts) {
+    if (b.state === "dead" || b.radius <= 0) continue;
+    const c = PALETTE[b.color];
+    const r = b.radius;
+
+    // translucent inner body
+    const body = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
+    body.addColorStop(0.0, hexA(c.core, 0.16 * b.alpha));
+    body.addColorStop(0.55, hexA(c.mid, 0.10 * b.alpha));
+    body.addColorStop(0.86, hexA(c.mid, 0.20 * b.alpha));
+    body.addColorStop(1.0, hexA(c.edge, 0));
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // luminous rim
+    ctx.globalAlpha = 0.85 * b.alpha;
+    ctx.strokeStyle = c.mid;
+    ctx.lineWidth = Math.max(1.4, r * 0.028);
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r * 0.985, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.35 * b.alpha;
+    ctx.strokeStyle = c.core;
+    ctx.lineWidth = Math.max(0.8, r * 0.012);
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r * 0.985, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // small glowing heart at origin
+    const coreR = 10 + r * 0.06;
+    ctx.globalAlpha = 0.9 * b.alpha;
+    ctx.drawImage(sprites[b.color], b.x - coreR * 2, b.y - coreR * 2, coreR * 4, coreR * 4);
+  }
+
+  // sparkles
+  for (const s of game.sparkles) {
+    const k = 1 - s.t / s.life;
+    const c = PALETTE[s.color];
+    ctx.globalAlpha = k * 0.9;
+    ctx.fillStyle = c.core;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r * (0.6 + k * 0.7), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = k * 0.35;
+    ctx.fillStyle = c.mid;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r * 2.4 * k + 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // full-screen soft bloom during big chains
+  if (game.glow > 0.01) {
+    const g = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W, H) * 0.7);
+    g.addColorStop(0, `rgba(150,170,255,${0.10 * game.glow})`);
+    g.addColorStop(0.6, `rgba(190,150,255,${0.05 * game.glow})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+}
+
+/* ================================================================
+   Boot
+   ================================================================ */
+resize();
+updateHUD();
+showMenu();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
