@@ -491,9 +491,10 @@ function hexA(hex, a) {
 }
 
 /* ================================================================
-   Deterministic seeded randomness (mulberry32)
-   The same stage always produces the same starting layout,
-   so retries are replayable and learnable.
+   Seeded randomness (mulberry32)
+   Each stage attempt receives a fresh random seed, so particle
+   starting positions change every time while the layout generation
+   still remains smooth and controlled.
    ================================================================ */
 function mulberry32(seed) {
   let t = seed >>> 0;
@@ -503,6 +504,15 @@ function mulberry32(seed) {
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function randomSeed() {
+  if (window.crypto && crypto.getRandomValues) {
+    const a = new Uint32Array(1);
+    crypto.getRandomValues(a);
+    return a[0] >>> 0;
+  }
+  return ((Date.now() & 0xffffffff) ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
 }
 
 /* ================================================================
@@ -518,6 +528,7 @@ const game = {
   clicked: false,
   triggered: 0,
   chainCount: 0,
+  stageSeed: 0,          // fresh random seed for every stage attempt
   particles: [],
   blasts: [],            // active triggered circles (particles + player blast)
   sparkles: [],
@@ -540,7 +551,7 @@ function saveBest() {
    ================================================================ */
 function buildStage(index) {
   const def = STAGES[index];
-  const rand = mulberry32(index * 977 + 12345);
+  const rand = mulberry32(game.stageSeed || randomSeed());
   game.particles = [];
   game.blasts = [];
   game.sparkles = [];
@@ -912,6 +923,8 @@ function retryStage() { hidePanel(); beginStage(); }
 function confirmRestart() { startGame(); }
 
 function beginStage() {
+  // Fresh layout each time: next stage, retry, and full restart all reshuffle particles.
+  game.stageSeed = randomSeed();
   buildStage(game.stageIndex);
   game.mode = "playing";
   document.getElementById("hud").classList.add("visible");
