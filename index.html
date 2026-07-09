@@ -250,6 +250,25 @@ SOFTWARE.
     margin-left:10px;
   }
   button.ghost:hover{ border-color:rgba(180,195,255,.5); box-shadow:0 6px 24px rgba(0,0,0,.3); }
+  button:disabled,
+  button:disabled:hover{
+    opacity:.35; cursor:not-allowed;
+    transform:none; filter:grayscale(.5);
+    box-shadow:none;
+  }
+  /* Safety net: while the overlay is hidden/fading out, nothing inside it
+     may receive pointer events (buttons opt back in via pointer-events:auto,
+     which caused invisible buttons to swallow taps — see bugfix notes). */
+  #overlay:not(.visible), #overlay:not(.visible) *{ pointer-events:none !important; }
+
+  /* Stacked button column (menu / mode select) */
+  #p-buttons.stack button{ display:block; width:100%; margin:12px auto 0; }
+  #p-buttons.stack button.ghost{ margin-left:auto; }
+  #p-buttons .btn-note{
+    font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink-dim); margin-top:6px;
+    font-variant-numeric:tabular-nums;
+  }
 
   @media (prefers-reduced-motion:reduce){
     #hint{ animation:none; }
@@ -318,7 +337,7 @@ SOFTWARE.
 <div id="hud">
   <div class="hud-row">
     <div class="hud-group">
-      <div class="chip"><div class="label">Stage</div><div class="value" id="hud-stage">1 / 12</div></div>
+      <div class="chip"><div class="label" id="hud-mode">Normal · Stage</div><div class="value" id="hud-stage">1 / 12</div></div>
       <div class="chip" id="lives-chip"><div class="label">Lives</div><div class="value" id="hud-lives"></div></div>
     </div>
     <div class="chip" id="progress-chip">
@@ -352,7 +371,9 @@ SOFTWARE.
    CHAINBURST — Chain reaction puzzle
    ------------------------------------------------------------------
    HOW TO TUNE THIS GAME
-   • Particle count / clear requirement .... edit STAGES below
+   • Particle count / clear requirement .... edit NORMAL_STAGES /
+                                              HARD_STAGES /
+                                              VERY_HARD_STAGES below
    • Lives .................................. CONFIG.startLives
    • Colors ................................. PALETTE array
    • Expansion speed / feel ................. CONFIG.expandTime,
@@ -360,11 +381,12 @@ SOFTWARE.
                                               CONFIG.fadeTime,
                                               CONFIG.maxRadiusFactor
    • Add / edit stages ...................... push {count, goal}
-                                              objects onto STAGES
+                                              objects onto a stage list
+   • Add a difficulty ....................... push onto DIFFICULTIES
    ================================================================== */
 
 /* ---------- Stage definitions (count = moving particles, goal = required triggers) ---------- */
-const STAGES = [
+const NORMAL_STAGES = [
   { count: 5,  goal: 1  },   // Stage 1  — tutorial, nearly guaranteed
   { count: 10, goal: 2  },   // Stage 2
   { count: 15, goal: 3  },   // Stage 3
@@ -377,6 +399,42 @@ const STAGES = [
   { count: 50, goal: 33 },   // Stage 10
   { count: 55, goal: 44 },   // Stage 11
   { count: 60, goal: 55 },   // Stage 12 — very hard, still fair
+];
+
+const HARD_STAGES = [
+  { count: 15, goal: 5  },
+  { count: 20, goal: 7  },
+  { count: 25, goal: 9  },
+  { count: 30, goal: 13 },
+  { count: 35, goal: 18 },
+  { count: 40, goal: 23 },
+  { count: 45, goal: 29 },
+  { count: 50, goal: 35 },
+  { count: 55, goal: 43 },
+  { count: 60, goal: 51 },
+  { count: 65, goal: 57 },
+  { count: 70, goal: 63 },
+];
+
+const VERY_HARD_STAGES = [
+  { count: 25, goal: 14 },
+  { count: 30, goal: 18 },
+  { count: 35, goal: 24 },
+  { count: 40, goal: 29 },
+  { count: 45, goal: 35 },
+  { count: 50, goal: 41 },
+  { count: 55, goal: 48 },
+  { count: 60, goal: 54 },
+  { count: 65, goal: 60 },
+  { count: 70, goal: 66 },
+  { count: 75, goal: 72 },
+  { count: 80, goal: 78 },   // final — brutal on purpose
+];
+
+const DIFFICULTIES = [
+  { id: "normal",   name: "Normal",    stages: NORMAL_STAGES,    clusterChance: 0.58 },
+  { id: "hard",     name: "Hard",      stages: HARD_STAGES,      clusterChance: 0.66 },
+  { id: "veryHard", name: "Very Hard", stages: VERY_HARD_STAGES, clusterChance: 0.72 },
 ];
 
 /* ---------- Global tuning ---------- */
@@ -520,11 +578,15 @@ function randomSeed() {
    ================================================================ */
 const game = {
   mode: "menu",          // menu | playing | resolving | over
+  difficultyIndex: 0,    // index into DIFFICULTIES — set ONLY by startRun()
   stageIndex: 0,
   lives: CONFIG.startLives,
   score: 0,
   stageStartScore: 0,    // points earned in a failed attempt are rolled back
-  best: 0,
+  best: 0,               // all-mode best (legacy chainburst.best key)
+  bests: { normal: 0, hard: 0, veryHard: 0 },  // per-mode bests
+  unlockedHard: false,
+  unlockedVeryHard: false,
   clicked: false,
   triggered: 0,
   chainCount: 0,
@@ -536,21 +598,83 @@ const game = {
   shockwaves: [],        // decorative rings on trigger
 };
 
-try { game.best = parseInt(localStorage.getItem("chainburst.best") || "0", 10) || 0; }
-catch (e) { game.best = 0; }
+function currentDifficulty() { return DIFFICULTIES[game.difficultyIndex]; }
+function currentStages()     { return currentDifficulty().stages; }
+
+function currentClusterChance() {
+  const d = currentDifficulty();
+  // Higher difficulties need denser constellations so high-goal stages are hard, not impossible.
+  // Very Hard stages 9-12 get a small extra cluster boost to reduce unwinnable scatter.
+  const veryHardLateBoost = d.id === "veryHard" && game.stageIndex >= 8 ? 0.04 : 0;
+  return Math.min(0.78, d.clusterChance + veryHardLateBoost);
+}
+
+/* ---------- Persistence (localStorage, fails silently in private mode) ---------- */
+const LS_KEYS = {
+  best:            "chainburst.best",        // legacy key, kept for compatibility
+  bestNormal:      "chainburst.bestNormal",
+  bestHard:        "chainburst.bestHard",
+  bestVeryHard:    "chainburst.bestVeryHard",
+  unlockedHard:    "chainburst.unlockedHard",
+  unlockedVeryHard:"chainburst.unlockedVeryHard",
+};
+const BEST_KEY_BY_ID = { normal: LS_KEYS.bestNormal, hard: LS_KEYS.bestHard, veryHard: LS_KEYS.bestVeryHard };
+
+function lsGet(k)    { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function lsDel(k)    { try { localStorage.removeItem(k); } catch (e) {} }
+
+function loadProgress() {
+  game.best = parseInt(lsGet(LS_KEYS.best) || "0", 10) || 0;   // pre-existing best is preserved
+  game.bests.normal   = parseInt(lsGet(LS_KEYS.bestNormal)   || "0", 10) || 0;
+  game.bests.hard     = parseInt(lsGet(LS_KEYS.bestHard)     || "0", 10) || 0;
+  game.bests.veryHard = parseInt(lsGet(LS_KEYS.bestVeryHard) || "0", 10) || 0;
+  game.unlockedHard     = lsGet(LS_KEYS.unlockedHard)     === "1";
+  game.unlockedVeryHard = lsGet(LS_KEYS.unlockedVeryHard) === "1";
+}
+loadProgress();
 
 function saveBest() {
   if (game.score > game.best) {
     game.best = game.score;
-    try { localStorage.setItem("chainburst.best", String(game.best)); } catch (e) {}
+    lsSet(LS_KEYS.best, String(game.best));
   }
+  const id = currentDifficulty().id;
+  if (game.score > (game.bests[id] || 0)) {
+    game.bests[id] = game.score;
+    lsSet(BEST_KEY_BY_ID[id], String(game.score));
+  }
+}
+
+function unlockHard() {
+  if (!game.unlockedHard) { game.unlockedHard = true; lsSet(LS_KEYS.unlockedHard, "1"); return true; }
+  return false;
+}
+function unlockVeryHard() {
+  if (!game.unlockedVeryHard) { game.unlockedVeryHard = true; lsSet(LS_KEYS.unlockedVeryHard, "1"); return true; }
+  return false;
+}
+
+function resetProgress() {
+  [LS_KEYS.best, "chainburst.bestTotal", LS_KEYS.bestNormal, LS_KEYS.bestHard,
+   LS_KEYS.bestVeryHard, LS_KEYS.unlockedHard, LS_KEYS.unlockedVeryHard,
+   "chainburst.progress"].forEach(lsDel);
+  game.best = 0;
+  game.bests = { normal: 0, hard: 0, veryHard: 0 };
+  game.unlockedHard = false;
+  game.unlockedVeryHard = false;
+  game.score = 0;
+  game.difficultyIndex = 0;
+  game.stageIndex = 0;
+  updateHUD();
+  showMenu();
 }
 
 /* ================================================================
    Stage generation — seeded, with natural clusters
    ================================================================ */
 function buildStage(index) {
-  const def = STAGES[index];
+  const def = currentStages()[index];
   const rand = mulberry32(game.stageSeed || randomSeed());
   game.particles = [];
   game.blasts = [];
@@ -565,8 +689,8 @@ function buildStage(index) {
   const pad = Math.min(W, H) * 0.06 + 14;
   const speedScale = Math.min(W, H) / 640;
 
-  // ~55% of particles are seeded near cluster centers so natural
-  // groupings exist and every layout has a fair "good click".
+  // A difficulty-specific percentage of particles is seeded near cluster centers,
+  // so high-goal stages stay challenging without turning into pure scatter-luck.
   const clusterN = Math.max(2, Math.round(def.count / 9));
   const clusters = [];
   for (let i = 0; i < clusterN; i++) {
@@ -576,9 +700,11 @@ function buildStage(index) {
     });
   }
 
+  const clusterChance = currentClusterChance();
+
   for (let i = 0; i < def.count; i++) {
     let x, y;
-    if (rand() < 0.55) {
+    if (rand() < clusterChance) {
       const c = clusters[Math.floor(rand() * clusters.length)];
       const ang = rand() * Math.PI * 2;
       const dist = (rand() + rand()) * 0.5 * Math.min(W, H) * 0.17;
@@ -695,6 +821,8 @@ function isTapInsideHud(y) {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  // Canvas input is ONLY valid mid-stage: never while a panel is up or fading.
+  if (overlay.classList.contains("visible")) return;
   if (game.mode !== "playing" || game.clicked) return;  // extra clicks ignored
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -784,7 +912,8 @@ function update(dt, time) {
    ================================================================ */
 function resolveStage() {
   game.mode = "resolving";
-  const def = STAGES[game.stageIndex];
+  const stages = currentStages();
+  const def = stages[game.stageIndex];
   const cleared = game.triggered >= def.goal;
 
   if (cleared) {
@@ -795,8 +924,8 @@ function resolveStage() {
     game.score += clearBonus + overBonus + lifeBonus;
     saveBest();
     updateHUD();
-    if (game.stageIndex === STAGES.length - 1) {
-      showGameClear();
+    if (game.stageIndex === stages.length - 1) {
+      completeDifficulty();   // mode-clear path — ONLY reachable from the last stage
     } else {
       showStageClear(def, over, clearBonus, overBonus, lifeBonus);
     }
@@ -824,78 +953,172 @@ const pSub     = document.getElementById("p-sub");
 const pDetail  = document.getElementById("p-detail");
 const pButtons = document.getElementById("p-buttons");
 
-function showPanel(cls, kicker, title, sub, detailHTML, buttons) {
+/* Buttons are described as objects:
+   { label, fn, ghost?, disabled?, note? }
+   note = small caption rendered under the button (lock hints / mode bests). */
+function showPanel(cls, kicker, title, sub, detailHTML, buttons, stack) {
   panel.className = "panel " + cls;
   pKicker.textContent = kicker;
   pTitle.textContent = title;
   pSub.textContent = sub;
   pDetail.innerHTML = detailHTML;
   pButtons.innerHTML = "";
-  buttons.forEach(([label, fn, ghost], i) => {
+  pButtons.className = stack ? "stack" : "";
+  let firstEnabled = null;
+  buttons.forEach((def) => {
     const b = document.createElement("button");
-    b.textContent = label;
-    if (ghost) b.className = "ghost";
-    b.addEventListener("click", fn);
+    b.textContent = def.label;
+    if (def.ghost) b.className = "ghost";
+    if (def.disabled) b.disabled = true;
+    b.addEventListener("click", (ev) => {
+      // Buttons must never let the event reach anything underneath,
+      // and must never fire once the panel started closing.
+      ev.stopPropagation();
+      ev.preventDefault();
+      if (b.disabled || !overlay.classList.contains("visible")) return;
+      def.fn();
+    });
+    // Kill pointerdown at the button too, so it can't be seen elsewhere.
+    b.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     pButtons.appendChild(b);
-    if (i === 0) setTimeout(() => b.focus(), 60);
+    if (def.note) {
+      const n = document.createElement("div");
+      n.className = "btn-note";
+      n.innerHTML = def.note;
+      pButtons.appendChild(n);
+    }
+    if (!firstEnabled && !def.disabled) firstEnabled = b;
   });
+  if (firstEnabled) setTimeout(() => firstEnabled.focus(), 60);
   overlay.classList.add("visible");
   game.mode = "over";
 }
 
-function hidePanel() { overlay.classList.remove("visible"); }
+function hidePanel() {
+  overlay.classList.remove("visible");
+  // BUGFIX (accidental jump back to Stage 1):
+  // Buttons have `pointer-events:auto`, which overrode the hidden overlay's
+  // `pointer-events:none`. After closing a panel, its invisible buttons kept
+  // sitting mid-screen and could still catch taps — e.g. the game-over
+  // "Restart" button silently firing startGame() again during play.
+  // Removing the buttons (plus the CSS safety net) eliminates that path.
+  if (document.activeElement && panel.contains(document.activeElement)) {
+    document.activeElement.blur();  // an off-screen focused button would still accept Enter/Space
+  }
+  pButtons.innerHTML = "";
+}
 
 function bestTag() {
   return game.score >= game.best && game.score > 0
     ? '<span class="best-tag">New best</span>' : "";
 }
 
+function modeBestNote(id) {
+  const v = game.bests[id] || 0;
+  return v > 0 ? `Best ${v.toLocaleString()}` : "";
+}
+
 function showMenu() {
   showPanel("", "Chain reaction puzzle", "ChainBurst",
     "One click. Endless ripples.",
     `Set off a single spark and watch it bloom.<br>
-     Trigger enough drifting lights to clear each of the <b>12 stages</b>.<br>
-     You have <b>${CONFIG.startLives} lives</b>. Best score: <b>${game.best.toLocaleString()}</b>`,
-    [["Start", startGame]]);
+ Clear <b>12&nbsp;stages</b> to unlock harder modes.<br>
+ You have <b>${CONFIG.startLives} lives</b>. Best score: <b>${game.best.toLocaleString()}</b>`,
+    [
+      { label: "Normal", fn: () => startRun(0), note: modeBestNote("normal") },
+      { label: game.unlockedHard ? "Hard" : "Hard — Locked",
+        fn: () => startRun(1),
+        disabled: !game.unlockedHard,
+        note: game.unlockedHard ? modeBestNote("hard") : "Clear Normal to unlock" },
+      { label: game.unlockedVeryHard ? "Very Hard" : "Very Hard — Locked",
+        fn: () => startRun(2),
+        disabled: !game.unlockedVeryHard,
+        note: game.unlockedVeryHard ? modeBestNote("veryHard") : "Clear Hard to unlock" },
+      { label: "Reset Progress", fn: showResetConfirm, ghost: true },
+    ], true);
+}
+
+function showResetConfirm() {
+  showPanel("result-fail", "Are you sure?", "Reset Progress?",
+    "This cannot be undone.",
+    `This will clear best scores and unlocked mode progress.`,
+    [
+      { label: "Reset", fn: resetProgress },
+      { label: "Cancel", fn: showMenu, ghost: true },
+    ], true);
 }
 
 function showStageClear(def, over, clearBonus, overBonus, lifeBonus) {
   celebrate(1);
-  showPanel("result-clear", `Stage ${game.stageIndex + 1} complete`, "Beautiful.",
+  showPanel("result-clear", `${currentDifficulty().name} · Stage ${game.stageIndex + 1} complete`, "Beautiful.",
     "The chain sang.",
     `Triggered <b>${game.triggered} / ${def.goal}</b>${over > 0 ? ` &nbsp;(+${over} extra)` : ""}<br>
      Clear bonus <b>+${clearBonus.toLocaleString()}</b>
      ${over > 0 ? ` · Overflow <b>+${overBonus.toLocaleString()}</b>` : ""}
      · Life bonus <b>+${lifeBonus.toLocaleString()}</b><br>
      Score <b>${game.score.toLocaleString()}</b> ${bestTag()}`,
-    [["Next Stage", nextStage]]);
+    [{ label: "Next Stage", fn: nextStage }]);
 }
 
 function showStageFail(def) {
-  showPanel("result-fail", `Stage ${game.stageIndex + 1}`, "So close.",
+  showPanel("result-fail", `${currentDifficulty().name} · Stage ${game.stageIndex + 1}`, "So close.",
     "The ripple faded too soon.",
     `Triggered <b>${game.triggered} / ${def.goal}</b><br>
      Lives remaining <b>${game.lives}</b> — the same constellation awaits.`,
-    [["Retry", retryStage], ["Restart", confirmRestart, true]]);
+    [
+      { label: "Retry", fn: retryStage },
+      { label: "Restart", fn: confirmRestart, ghost: true },
+    ]);
 }
 
 function showGameOver(def) {
   showPanel("result-gameover", "No lives remain", "Game Over",
     "Every light must dim eventually.",
-    `Reached stage <b>${game.stageIndex + 1}</b> ·
+    `Reached <b>${currentDifficulty().name}</b> stage <b>${game.stageIndex + 1}</b> ·
      Final triggered <b>${game.triggered} / ${def.goal}</b><br>
      Score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
      Best <b>${game.best.toLocaleString()}</b>`,
-    [["Restart", startGame]]);
+    [
+      { label: "Restart", fn: () => startRun(game.difficultyIndex) },
+      { label: "Back to Menu", fn: showMenu, ghost: true },
+    ]);
 }
 
-function showGameClear() {
+/* Called ONLY when the final stage of the current difficulty is cleared */
+function completeDifficulty() {
+  const d = currentDifficulty();
   celebrate(2.2);
-  showPanel("result-gameclear", "All 12 stages complete", "Game Clear",
-    "You conducted the whole sky.",
-    `Final score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
-     Best <b>${game.best.toLocaleString()}</b> · Lives left <b>${game.lives}</b>`,
-    [["Restart", startGame]]);
+
+  if (d.id === "normal") {
+    const newly = unlockHard();
+    showPanel("result-gameclear", "All 12 stages complete", "Normal Clear",
+      newly ? "Hard mode unlocked!" : "Hard mode awaits.",
+      `Final score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
+       Best <b>${game.best.toLocaleString()}</b> · Lives left <b>${game.lives}</b>`,
+      [
+        { label: "Play Hard", fn: () => startRun(1) },
+        { label: "Back to Menu", fn: showMenu, ghost: true },
+      ]);
+  } else if (d.id === "hard") {
+    const newly = unlockVeryHard();
+    showPanel("result-gameclear", "All 12 stages complete", "Hard Clear",
+      newly ? "Very Hard mode unlocked!" : "Very Hard mode awaits.",
+      `Final score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
+       Best <b>${game.best.toLocaleString()}</b> · Lives left <b>${game.lives}</b>`,
+      [
+        { label: "Play Very Hard", fn: () => startRun(2) },
+        { label: "Back to Menu", fn: showMenu, ghost: true },
+      ]);
+  } else {
+    showPanel("result-gameclear", "Every stage, every mode", "All Modes Clear",
+      "You mastered the whole chain.",
+      `Final score <b>${game.score.toLocaleString()}</b> ${bestTag()}<br>
+       Best <b>${game.best.toLocaleString()}</b> · Lives left <b>${game.lives}</b>`,
+      [
+        { label: "Back to Menu", fn: showMenu },
+        { label: "Restart Normal", fn: () => startRun(0), ghost: true },
+      ]);
+  }
 }
 
 /* Celebration burst drawn behind the panel */
@@ -910,9 +1133,17 @@ function celebrate(strength) {
   game.glow = Math.min(1, 0.5 * strength);
 }
 
-/* ---------- Flow ---------- */
-function startGame() {
+/* ---------- Flow ----------
+   startRun(i)          — ONLY entry point that sets difficultyIndex (menu /
+                          "Play Hard" / "Restart" buttons). Resets a fresh run.
+   beginStage()         — (re)builds the current stage; never changes indices.
+   retryStage()         — same difficulty, same stage.
+   nextStage()          — same difficulty, stage + 1.
+   completeDifficulty() — reached only from the last stage of a mode.
+   showMenu()           — back to mode select; touches no run state.        */
+function startRun(difficultyIndex) {
   hidePanel();
+  game.difficultyIndex = difficultyIndex;
   game.stageIndex = 0;
   game.lives = CONFIG.startLives;
   game.score = 0;
@@ -920,7 +1151,7 @@ function startGame() {
 }
 function nextStage() { hidePanel(); game.stageIndex++; beginStage(); }
 function retryStage() { hidePanel(); beginStage(); }
-function confirmRestart() { startGame(); }
+function confirmRestart() { startRun(game.difficultyIndex); }  // restart this mode, not Normal
 
 function beginStage() {
   // Fresh layout each time: next stage, retry, and full restart all reshuffle particles.
@@ -929,9 +1160,9 @@ function beginStage() {
   game.mode = "playing";
   document.getElementById("hud").classList.add("visible");
   const hint = document.getElementById("hint");
-  hint.textContent = game.stageIndex === 0
+  hint.textContent = game.difficultyIndex === 0 && game.stageIndex === 0
     ? "Click once to start the chain"
-    : `Stage ${game.stageIndex + 1} — one click`;
+    : `${currentDifficulty().name} · Stage ${game.stageIndex + 1} — one click`;
   hint.classList.add("visible");
   setTimeout(() => hint.classList.remove("visible"), 3200);
 }
@@ -940,8 +1171,10 @@ function beginStage() {
    HUD
    ================================================================ */
 function updateHUD() {
-  const def = STAGES[game.stageIndex];
-  document.getElementById("hud-stage").textContent = `${game.stageIndex + 1} / ${STAGES.length}`;
+  const stages = currentStages();
+  const def = stages[game.stageIndex];
+  document.getElementById("hud-mode").textContent = `${currentDifficulty().name} · Stage`;
+  document.getElementById("hud-stage").textContent = `${game.stageIndex + 1} / ${stages.length}`;
   let hearts = "";
   for (let i = 0; i < CONFIG.startLives; i++) {
     hearts += i < game.lives
